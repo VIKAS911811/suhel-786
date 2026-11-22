@@ -1,0 +1,6 @@
+{
+  "name": "SR GROUP – DAILY WORK, WORKER & PROFIT/LOSS MANAGEMENT SYSTEM",
+  "description": "Daily work tracking, worker attendance, wages, project monitoring, expense & income management, and automated profit/loss calculation system for SR GROUP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
