@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
+import os from 'os';
 
 import {
   INITIAL_COMPANIES,
@@ -23,18 +23,32 @@ import {
 } from './src/lib/initialData';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '15mb' }));
 
-// Persistent database path
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// Persistent database path with writable fallback for read-only production containers
+function resolveWritableDataDir(): string {
+  const candidates = [
+    path.join(process.cwd(), 'data'),
+    path.join(os.tmpdir(), 'sr-group-erp-data'),
+  ];
+  for (const dir of candidates) {
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch {
+      // Try next candidate
+    }
+  }
+  return os.tmpdir();
 }
+
+const DATA_DIR = resolveWritableDataDir();
+const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 interface DatabaseSchema {
   companies: any[];
@@ -348,23 +362,47 @@ app.post('/api/restore', (req, res) => {
 // -------------------------------------------------------------
 // Vite Middleware / Static Serving
 // -------------------------------------------------------------
+function resolveDistPath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'dist'),
+    typeof __dirname !== 'undefined' ? __dirname : '',
+    typeof __dirname !== 'undefined' ? path.resolve(__dirname, 'dist') : '',
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'index.html'))) {
+      return dir;
+    }
+  }
+  return path.join(process.cwd(), 'dist');
+}
+
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isBundledCjs = typeof __filename !== 'undefined' && path.basename(__filename) === 'server.cjs';
+  const isProduction = process.env.NODE_ENV === 'production' || isBundledCjs;
+
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    const distPath = resolveDistPath();
+    app.use(express.static(distPath, { index: 'index.html' }));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      const indexFile = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        res.status(404).send('Production build not found. Please run npm run build.');
+      }
     });
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SR GROUP ERP Server running on http://localhost:${PORT}`);
+    console.log(`SR GROUP ERP Server running on http://0.0.0.0:${PORT} (production=${isProduction})`);
   });
 
   server.on('error', (err: any) => {
